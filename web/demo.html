@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raft Control Room</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e3e6eb;
+    --text: #15181d;
+    --muted: #646b78;
+    --faint: #9aa1ad;
+    --accent: #2f6fdf;
+    --leader: #1f9d63;
+    --leader-soft: #e3f5ec;
+    --follower: #2f6fdf;
+    --follower-soft: #e6eefc;
+    --candidate: #c98a12;
+    --candidate-soft: #fbf1dc;
+    --down: #d14343;
+    --down-soft: #fbe7e7;
+    --track: #edf0f3;
+    --chart-ok: #2f6fdf;
+    --chart-fail: #d14343;
+    --chart-p99: #c98a12;
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --panel: #171a20;
+      --border: #272b33;
+      --text: #e8eaee;
+      --muted: #9aa1ad;
+      --faint: #6b7280;
+      --accent: #6b9cf5;
+      --leader: #3cc488;
+      --leader-soft: #143225;
+      --follower: #6b9cf5;
+      --follower-soft: #172440;
+      --candidate: #e3a93a;
+      --candidate-soft: #352a12;
+      --down: #f07070;
+      --down-soft: #3a1a1a;
+      --track: #232730;
+      --chart-ok: #6b9cf5;
+      --chart-fail: #f07070;
+      --chart-p99: #e3a93a;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-weight: 600; white-space: nowrap;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .dot.ok { background: var(--leader); }
+  .dot.bad { background: var(--down); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 16px;
+  }
+  .panel h2 {
+    margin: 0 0 12px; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 16px; }
+  .group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .group label.title { color: var(--muted); font-size: 13px; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    border-radius: 8px; padding: 8px 14px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.danger { background: var(--down); border-color: var(--down); color: #fff; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 5px 10px; font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 7px 11px; font-weight: 500; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: var(--follower-soft); color: var(--accent); font-weight: 600; }
+  .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+  .nodes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+  .node { position: relative; transition: border-color 0.2s; }
+  .node.leader { border-color: var(--leader); box-shadow: 0 0 0 1px var(--leader) inset; }
+  .node.down { border-style: dashed; }
+  .node-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+  .node-id { font-size: 18px; font-weight: 700; }
+  .node-addr { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+  .role {
+    padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .role.leader { background: var(--leader-soft); color: var(--leader); }
+  .role.follower { background: var(--follower-soft); color: var(--follower); }
+  .role.candidate { background: var(--candidate-soft); color: var(--candidate); }
+  .role.down { background: var(--down-soft); color: var(--down); }
+  .kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .kv div span { display: block; color: var(--muted); font-size: 12px; }
+  .kv div b { font-family: var(--mono); font-size: 18px; font-variant-numeric: tabular-nums; }
+  .repl-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--follower); transition: width 0.25s; }
+  .node.leader .bar i { background: var(--leader); }
+  .node-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; color: var(--faint); font-size: 12px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .note { color: var(--faint); font-size: 12px; }
+  .tile.good .value { color: var(--leader); }
+  .tile.bad .value { color: var(--down); }
+
+  .verify {
+    display: none; margin-bottom: 16px; padding: 14px 16px; border-radius: 12px;
+    border: 1px solid var(--leader); background: var(--leader-soft); font-weight: 600;
+  }
+  .verify.show { display: block; }
+  .verify.fail { border-color: var(--down); background: var(--down-soft); }
+  .verify small { display: block; font-weight: 400; color: var(--muted); margin-top: 2px; }
+
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .chart svg { width: 100%; height: 180px; display: block; overflow: visible; }
+  .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .axis { fill: var(--faint); font-size: 10px; font-family: var(--mono); }
+  .grid-line { stroke: var(--border); stroke-width: 1; }
+  .crash-line { stroke: var(--down); stroke-width: 1; stroke-dasharray: 3 3; }
+  .crash-label { fill: var(--down); font-size: 10px; font-weight: 600; }
+
+  .bottom { display: grid; grid-template-columns: 1fr 1.3fr; gap: 16px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  .empty { color: var(--faint); padding: 12px 0; }
+  .log { max-height: 320px; overflow-y: auto; font-size: 13px; }
+  .log div { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .log time { color: var(--faint); font-family: var(--mono); font-size: 12px; flex: none; padding-top: 1px; }
+  .log .k { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--faint); }
+  .log .k.crash, .log .k.error, .log .k.warn { background: var(--down); }
+  .log .k.leader { background: var(--leader); }
+  .log .k.recover, .log .k.verify { background: var(--accent); }
+  .log .k.restart, .log .k.load { background: var(--candidate); }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--down); color: #fff; padding: 10px 16px; border-radius: 8px;
+    font-weight: 600; opacity: 0; transition: opacity 0.2s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 960px) {
+    .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .charts, .bottom { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .nodes { grid-template-columns: 1fr; }
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Raft Control Room</h1>
+      <div class="sub">3-node replicated key–value store · crash nodes and watch the cluster recover</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="pill" id="leaderPill"><span class="dot"></span><span>Connecting…</span></div>
+  </header>
+
+  <div class="panel controls">
+    <div class="group">
+      <button class="danger" id="killLeader">Kill leader</button>
+      <label class="toggle"><input type="checkbox" id="autoRestart"> <span id="autoRestartLabel">Auto-restart</span></label>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <label class="title">Write load</label>
+      <div class="seg" id="rates">
+        <button data-rate="50">50/s</button>
+        <button data-rate="100">100/s</button>
+        <button data-rate="300">300/s</button>
+        <button data-rate="0">Max</button>
+      </div>
+      <button class="primary" id="loadBtn">Start load</button>
+    </div>
+  </div>
+
+  <div class="nodes" id="nodes"></div>
+
+  <div class="verify" id="verify"></div>
+
+  <div class="tiles">
+    <div class="panel tile"><div class="label">Acknowledged writes</div><div class="value" id="tAcked">0</div><div class="note" id="tRate">idle</div></div>
+    <div class="panel tile"><div class="label">Failed requests</div><div class="value" id="tFailed">0</div><div class="note">no leader / not acked</div></div>
+    <div class="panel tile"><div class="label">Write latency p50</div><div class="value" id="tP50">–</div><div class="note">recent 20k writes</div></div>
+    <div class="panel tile"><div class="label">Write latency p99</div><div class="value" id="tP99">–</div><div class="note">recent 20k writes</div></div>
+    <div class="panel tile"><div class="label">Last leader election</div><div class="value" id="tElection">–</div><div class="note" id="tElectionNote">kill the leader to measure</div></div>
+    <div class="panel tile" id="lostTile"><div class="label">Lost writes</div><div class="value" id="tLost">–</div><div class="note" id="tLostNote">stop load to verify</div></div>
+  </div>
+
+  <div class="charts">
+    <div class="panel chart">
+      <h2>Throughput (writes/s, last 60s)</h2>
+      <svg id="thrChart" viewBox="0 0 560 180" preserveAspectRatio="none"></svg>
+      <div class="legend"><span><i style="background:var(--chart-ok)"></i>acknowledged</span><span><i style="background:var(--chart-fail)"></i>failed</span><span><i style="background:var(--chart-fail);height:1px"></i>node killed</span></div>
+    </div>
+    <div class="panel chart">
+      <h2>Write latency (ms, last 60s)</h2>
+      <svg id="latChart" viewBox="0 0 560 180" preserveAspectRatio="none"></svg>
+      <div class="legend"><span><i style="background:var(--chart-ok)"></i>p50</span><span><i style="background:var(--chart-p99)"></i>p99</span></div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="panel">
+      <h2>Failover history</h2>
+      <div id="failovers"></div>
+    </div>
+    <div class="panel">
+      <h2>Event log</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null;
+let selectedRate = 100;
+let busy = false;
+let lastOkPoll = 0;
+
+function fmtMs(ms) {
+  if (ms == null) return '–';
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
+}
+function fmtLat(ms) {
+  if (!ms) return '–';
+  return ms < 10 ? `${ms.toFixed(1)}ms` : `${Math.round(ms)}ms`;
+}
+function fmtNum(n) { return n.toLocaleString(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function clock(t) { return new Date(t).toLocaleTimeString([], { hour12: false }); }
+
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+async function post(path, body) {
+  busy = true;
+  try {
+    const resp = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!resp.ok) toast((await resp.text()).trim() || `Request failed (${resp.status})`);
+  } catch (e) {
+    toast('Control room is not reachable');
+  } finally {
+    busy = false;
+    poll();
+  }
+}
+
+function roleOf(n) {
+  if (!n.running) return { cls: 'down', label: n.restart_in_ms > 0 ? `Down · restart ${Math.ceil(n.restart_in_ms / 1000)}s` : 'Down' };
+  if (!n.status) return { cls: 'candidate', label: 'Starting' };
+  if (n.status.is_leader) return { cls: 'leader', label: 'Leader' };
+  if (n.status.state === 'Candidate') return { cls: 'candidate', label: 'Candidate' };
+  if (n.catching_up) return { cls: 'candidate', label: 'Catching up' };
+  return { cls: 'follower', label: 'Follower' };
+}
+
+function renderNodes(c) {
+  const html = nodesHTML(c);
+  // Skip identical redraws so hover and focus states survive between polls
+  if (html !== renderNodes.last) $('nodes').innerHTML = renderNodes.last = html;
+}
+
+function nodesHTML(c) {
+  const leader = c.nodes.find((n) => n.id === c.leader);
+  const leaderCommit = leader && leader.status ? leader.status.commit_index : 0;
+  return c.nodes.map((n) => {
+    const role = roleOf(n);
+    const s = n.status;
+    const applied = s ? s.applied_index : 0;
+    const pct = leaderCommit ? Math.min(100, (applied / leaderCommit) * 100) : (s ? 100 : 0);
+    const lag = s && leaderCommit ? Math.max(0, leaderCommit - applied) : null;
+    const uptime = n.running ? `up ${Math.floor(n.uptime_ms / 1000)}s` : 'process stopped';
+    const action = n.running
+      ? `<button class="small" data-kill="${n.id}">Kill</button>`
+      : `<button class="small" data-start="${n.id}">Start</button>`;
+    return `
+      <div class="panel node ${role.cls}">
+        <div class="node-head">
+          <div><div class="node-id">${esc(n.id)}</div><div class="node-addr">${esc(n.http.replace('http://', ''))}</div></div>
+          <span class="role ${role.cls}">${role.label}</span>
+        </div>
+        <div class="kv">
+          <div><span>Term</span><b>${s ? s.term : '–'}</b></div>
+          <div><span>Applied</span><b>${s ? fmtNum(s.applied_index) : '–'}</b></div>
+          <div><span>Keys</span><b>${s ? fmtNum(s.keys) : '–'}</b></div>
+        </div>
+        <div class="repl-label"><span>Replication</span><span>${lag == null ? '–' : lag === 0 ? 'in sync' : `${fmtNum(lag)} behind`}</span></div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="node-foot"><span>${uptime}</span>${action}</div>
+      </div>`;
+  }).join('');
+}
+
+function renderHeader(c) {
+  const pill = $('leaderPill');
+  const leader = c.nodes.find((n) => n.id === c.leader);
+  if (leader && leader.status) {
+    pill.innerHTML = `<span class="dot ok"></span><span>Leader: ${esc(leader.id)} · term ${leader.status.term}</span>`;
+  } else {
+    pill.innerHTML = `<span class="dot bad"></span><span>No leader · election in progress</span>`;
+  }
+  $('killLeader').disabled = !c.leader;
+  $('autoRestart').checked = c.auto_restart;
+  $('autoRestartLabel').textContent = `Auto-restart after ${c.restart_delay_ms / 1000}s`;
+}
+
+function renderLoad(l) {
+  $('loadBtn').textContent = l.verifying ? 'Verifying…' : l.running ? 'Stop & verify' : 'Start load';
+  $('loadBtn').className = l.running ? 'danger' : 'primary';
+  $('loadBtn').disabled = l.verifying;
+  document.querySelectorAll('#rates button').forEach((b) => {
+    b.classList.toggle('on', Number(b.dataset.rate) === (l.running ? l.rate : selectedRate));
+  });
+
+  $('tAcked').textContent = fmtNum(l.acked);
+  $('tFailed').textContent = fmtNum(l.failed);
+  $('tP50').textContent = fmtLat(l.p50_ms);
+  $('tP99').textContent = fmtLat(l.p99_ms);
+  const last = l.series.slice(-5);
+  const recent = last.length ? last.reduce((a, p) => a + p.ok, 0) / last.length : 0;
+  $('tRate').textContent = l.running ? `${Math.round(recent)} writes/s now` : l.acked ? `run lasted ${fmtMs(l.elapsed_ms)}` : 'idle';
+
+  const v = l.verify;
+  const banner = $('verify');
+  const tile = $('lostTile');
+  if (v) {
+    const inconsistent = v.nodes.reduce((a, n) => a + n.missing, 0);
+    const ok = v.lost === 0 && inconsistent === 0;
+    $('tLost').textContent = fmtNum(v.lost);
+    $('tLostNote').textContent = `of ${fmtNum(v.acked)} acknowledged`;
+    tile.className = `panel tile ${ok ? 'good' : 'bad'}`;
+    const skipped = v.skipped && v.skipped.length ? ` · skipped ${v.skipped.join(', ')} (down)` : '';
+    banner.className = `verify show ${ok ? '' : 'fail'}`;
+    banner.innerHTML = ok
+      ? `✓ All ${fmtNum(v.acked)} acknowledged writes are present on every live node — 0 lost<small>Read back from ${v.nodes.map((n) => n.id).join(', ')} in ${fmtMs(v.duration_ms)}${skipped}</small>`
+      : `✗ ${fmtNum(v.lost)} acknowledged writes lost, ${fmtNum(inconsistent)} missing across nodes<small>${v.nodes.map((n) => `${n.id}: ${n.missing} missing`).join(' · ')}${skipped}</small>`;
+  } else {
+    $('tLost').textContent = l.verifying ? '…' : '–';
+    $('tLostNote').textContent = l.verifying ? 'reading back every key' : 'stop load to verify';
+    tile.className = 'panel tile';
+    banner.className = 'verify';
+  }
+}
+
+function renderFailovers(c) {
+  const rows = c.failovers.slice().reverse();
+  const latest = c.pending && c.pending.elected ? c.pending : rows[0];
+  $('tElection').textContent = latest ? fmtMs(latest.election_ms) : '–';
+  $('tElectionNote').textContent = latest
+    ? `${latest.from} → ${latest.to}` + (latest.write_gap_ms != null ? ` · writes paused ${fmtMs(latest.write_gap_ms)}` : '')
+    : c.pending ? 'election in progress…' : 'kill the leader to measure';
+
+  if (!rows.length) {
+    $('failovers').innerHTML = `<div class="empty">No failovers yet. Start the load, then press <b>Kill leader</b>.</div>`;
+    return;
+  }
+  const elections = rows.map((f) => f.election_ms).sort((a, b) => a - b);
+  const median = elections[Math.floor((elections.length - 1) / 2)];
+  $('failovers').innerHTML = `
+    <table>
+      <thead><tr><th>Time</th><th>Old → new leader</th><th class="num">Election</th><th class="num">Write gap</th></tr></thead>
+      <tbody>${rows.map((f) => `
+        <tr><td>${clock(f.killed_at)}</td><td>${esc(f.from)} → ${esc(f.to)}</td>
+        <td class="num">${fmtMs(f.election_ms)}</td><td class="num">${f.write_gap_ms != null ? fmtMs(f.write_gap_ms) : '–'}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="empty">${rows.length} failover${rows.length > 1 ? 's' : ''} · median election ${fmtMs(median)}</div>`;
+}
+
+function renderLog(c) {
+  const el = $('log');
+  const atTop = el.scrollTop < 8;
+  el.innerHTML = c.events.slice().reverse().map((e) =>
+    `<div><time>${clock(e.time)}</time><span class="k ${e.kind}"></span><span>${esc(e.msg)}</span></div>`).join('');
+  if (atTop) el.scrollTop = 0;
+}
+
+// Draws a simple time-series chart; series share the x-axis of l.series
+function drawChart(svg, points, lines, crashes, opts) {
+  const W = 560, H = 180, L = 34, R = 6, T = 8, B = 20;
+  const n = points.length;
+  const x = (i) => L + (i / Math.max(1, n - 1)) * (W - L - R);
+  let maxY = 0;
+  lines.forEach((ln) => points.forEach((p) => { maxY = Math.max(maxY, ln.value(p)); }));
+  maxY = niceMax(maxY || opts.minMax);
+  const y = (v) => T + (1 - v / maxY) * (H - T - B);
+
+  let out = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = (maxY / 4) * i;
+    out += `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>`;
+    out += `<text class="axis" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${opts.fmt(v)}</text>`;
+  }
+  out += `<text class="axis" x="${L}" y="${H - 4}">-60s</text><text class="axis" x="${W - R}" y="${H - 4}" text-anchor="end">now</text>`;
+
+  const t0 = points.length ? points[0].t : 0;
+  crashes.forEach((c) => {
+    const i = c.t - t0;
+    if (i < 0 || i > n - 1) return;
+    out += `<line class="crash-line" x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}"/>`;
+    out += `<text class="crash-label" x="${x(i) + 4}" y="${T + 10}">${esc(c.label)}</text>`;
+  });
+
+  lines.forEach((ln) => {
+    const d = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(ln.value(p)).toFixed(1)}`).join('');
+    if (ln.fill) {
+      out += `<path d="${d}L${x(n - 1)},${y(0)}L${x(0)},${y(0)}Z" fill="${ln.color}" opacity="0.12"/>`;
+    }
+    out += `<path d="${d}" fill="none" stroke="${ln.color}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  });
+  svg.innerHTML = out;
+}
+
+function niceMax(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p;
+  return 10 * p;
+}
+
+function renderCharts(c, l) {
+  const crashes = c.events
+    .filter((e) => e.kind === 'crash')
+    .map((e) => ({ t: Math.floor(new Date(e.time).getTime() / 1000), label: ((e.msg.match(/node\d+/) || ['node'])[0]) + ' ✕' }));
+  const css = getComputedStyle(document.documentElement);
+  const ok = css.getPropertyValue('--chart-ok').trim();
+  const fail = css.getPropertyValue('--chart-fail').trim();
+  const p99 = css.getPropertyValue('--chart-p99').trim();
+  drawChart($('thrChart'), l.series, [
+    { value: (p) => p.ok, color: ok, fill: true },
+    { value: (p) => p.fail, color: fail },
+  ], crashes, { minMax: 10, fmt: (v) => Math.round(v) });
+  drawChart($('latChart'), l.series, [
+    { value: (p) => p.p50, color: ok },
+    { value: (p) => p.p99, color: p99 },
+  ], crashes, { minMax: 5, fmt: (v) => (v < 10 ? v.toFixed(1) : Math.round(v)) });
+}
+
+async function poll() {
+  try {
+    const resp = await fetch('/api/state', { cache: 'no-store' });
+    state = await resp.json();
+    lastOkPoll = Date.now();
+  } catch (e) {
+    if (Date.now() - lastOkPoll > 2000) {
+      $('leaderPill').innerHTML = `<span class="dot bad"></span><span>Control room offline — is <code>go run ./cmd/demo</code> running?</span>`;
+    }
+    return;
+  }
+  renderHeader(state.cluster);
+  renderNodes(state.cluster);
+  renderLoad(state.load);
+  renderFailovers(state.cluster);
+  renderLog(state.cluster);
+  renderCharts(state.cluster, state.load);
+}
+
+$('killLeader').addEventListener('click', () => post('/api/kill-leader'));
+$('autoRestart').addEventListener('change', (e) => post('/api/settings', { auto_restart: e.target.checked }));
+$('loadBtn').addEventListener('click', () => {
+  if (state && state.load.running) post('/api/load/stop');
+  else post('/api/load/start', { rate: selectedRate });
+});
+$('rates').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  selectedRate = Number(b.dataset.rate);
+  if (state && state.load.running) post('/api/load/start', { rate: selectedRate });
+  else poll();
+});
+// pointerdown, not click: cards re-render every poll and a redraw between
+// press and release would swallow the click
+$('nodes').addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.kill) post(`/api/nodes/${b.dataset.kill}/kill`);
+  if (b.dataset.start) post(`/api/nodes/${b.dataset.start}/start`);
+});
+
+poll();
+setInterval(() => { if (!busy) poll(); }, 250);
+</script>
+</body>
+</html>

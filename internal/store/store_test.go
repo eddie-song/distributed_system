@@ -14,6 +14,23 @@ func TestNewStore(t *testing.T) {
 	}
 }
 
+func TestLen(t *testing.T) {
+	store := NewStore()
+	if store.Len() != 0 {
+		t.Fatalf("Expected empty store, got %d keys", store.Len())
+	}
+	store.Put("a", []byte("1"))
+	store.Put("b", []byte("2"))
+	store.Put("a", []byte("3"))
+	if store.Len() != 2 {
+		t.Errorf("Expected 2 keys, got %d", store.Len())
+	}
+	store.Delete("a")
+	if store.Len() != 1 {
+		t.Errorf("Expected 1 key after delete, got %d", store.Len())
+	}
+}
+
 func TestPut(t *testing.T) {
 	store := NewStore()
 	key := "test-key"

@@ -43,6 +43,13 @@ func (s *Store) Delete(key string) bool {
 	return ok
 }
 
+// Len returns the number of keys in the store
+func (s *Store) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.data)
+}
+
 // Dump returns a deep copy of the current store for snapshotting
 func (s *Store) Dump() map[string][]byte {
 	s.mu.RLock()

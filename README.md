@@ -1,5 +1,32 @@
 # Mini Cloud - Distributed KV (Go + Raft)
 
+A fault-tolerant, replicated key–value store in Go. Three nodes agree on every write with the Raft consensus algorithm, so the cluster keeps serving requests and loses no acknowledged write when any node crashes, leader included.
+
+## Results
+
+Measured with the included benchmark (`go run ./cmd/demo -bench 10`) on one machine; [full methodology and caveats](docs/demo-and-metrics.md#benchmark-results).
+
+| Metric | Result |
+|---|---|
+| Acknowledged writes lost across 10 hard leader kills under load | **0 of 4,737** (verified on all 3 nodes) |
+| Leader failover time (kill → new leader elected) | **1.03 s** p50 · 1.27 s p90 · 1.33 s max |
+| Write unavailability seen by clients during failover | **1.04 s** p50 · 1.28 s p90 |
+| Sustained replicated write throughput (8 clients, fsync on every write) | **796 writes/s** |
+| Write latency including majority commit | **4.6 ms** p50 · 11.5 ms p99 |
+| Crashed node restart → caught up with the leader | **0.7 s** p50 · 1.0 s max |
+| Unit test coverage | store 100% · HTTP handlers 61.5% · Raft FSM 17.0%, plus multi-node integration tests |
+
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [Architecture](docs/architecture.md) | System and node diagrams, code layout, replication model, persistence, membership, observability, design trade-offs |
+| [Request flows](docs/request-flows.md) | Sequence diagrams: writes, reads, follower rejection, cluster formation, leader failover, restart catch-up, shutdown |
+| [Demo and metrics](docs/demo-and-metrics.md) | How the control room and benchmark work, what each metric measures, full results, caveats |
+| [API reference](docs/API.md) | Every HTTP endpoint with request/response examples |
+
+## Features
+
 A small, opinionated distributed key–value service with:
 - **Raft consensus** for leader election and replication
 - **Dynamic membership** (join/remove nodes at runtime)
@@ -7,6 +34,29 @@ A small, opinionated distributed key–value service with:
 - **Prometheus metrics** and structured logging
 - **Graceful shutdown** and durability via snapshots
 - **CLI tool** and web dashboard
+- **Live control room** for crashing nodes under load and measuring failover
+
+## Live demo: Raft control room
+
+One command starts a local 3-node cluster under a supervisor and opens a control room UI:
+```powershell
+go run ./cmd/demo
+```
+Then open http://127.0.0.1:8080. Add `-bench 10` to run the failover benchmark headless instead.
+
+From the control room you can:
+- **Generate write load** (50/100/300/max writes per second) against whichever node is leader
+- **Kill the leader** (a hard process kill) and watch a new leader get elected
+- **Kill or start any node**; with auto-restart on, killed nodes come back after 3s and replay the log to catch up
+- **Stop & verify**: every acknowledged write is read back from every live node to prove none were lost
+
+It measures and displays:
+- Leader election time after a crash, and the write gap clients actually saw
+- Write throughput and p50/p99 latency over the last 60s
+- Per-node term, applied index, key count and replication lag
+- Lost acknowledged writes (should always be 0)
+
+Flags: `-addr` (default `127.0.0.1:8080`), `-restart-delay` (default `3s`, `0` disables auto-restart), `-fresh` (default `true`, wipes demo data on start). Demo nodes use the normal `configs/node*.yaml` ports (9001–9003), so stop any manually started nodes first. Their data and logs live in `data/demo/`, separate from manual runs.
 
 ## 1) Prerequisites
 
@@ -17,10 +67,7 @@ A small, opinionated distributed key–value service with:
 
 ## 2) Project setup
 
-Open PowerShell at the project root:
-```
-C:\Users\eddie\OneDrive\Documents\Projects\distributed_cloud_service
-```
+Open PowerShell at the project root (the cloned `distributed_system` folder).
 
 Fetch dependencies, run tests, and build:
 ```powershell
@@ -56,7 +103,7 @@ make test-coverage         # With coverage report
 Test coverage:
 - Store: 100%
 - HTTP handlers: 61.5%
-- Raft FSM: 17.6%
+- Raft FSM: 17.0%
 
 ## 3) Run locally (single node or multi-node)
 
@@ -119,19 +166,19 @@ curl.exe http://127.0.0.1:9001/kv/foo
 curl.exe -X DELETE http://127.0.0.1:9001/kv/foo
 ```
 
-### 5.2 Leader-only writes with follower redirects (HTTP 307)
+### 5.2 Leader-only writes
 Try writing to a follower (e.g., node2 at port 9002):
 ```powershell
-curl.exe -i -X PUT http://127.0.0.1:9002/kv/redirect-test -d "ok"
+curl.exe -i -X PUT http://127.0.0.1:9002/kv/leader-test -d "ok"
 ```
-- Expected: `HTTP/1.1 307 Temporary Redirect` and a `Location` header pointing to the leader’s HTTP URL.
-- Follow the redirect automatically:
+- Expected: `HTTP/1.1 400 Bad Request` with body `Not the leader` and an `X-Leader` header holding the leader's Raft address (e.g. `127.0.0.1:9011`; its HTTP port is 10 lower).
+- Send the write to the leader instead:
 ```powershell
-curl.exe -L -X PUT http://127.0.0.1:9002/kv/redirect-test -d "ok"
+curl.exe -X PUT http://127.0.0.1:9001/kv/leader-test -d "ok"
 ```
 - Verify on any node:
 ```powershell
-curl.exe http://127.0.0.1:9003/kv/redirect-test
+curl.exe http://127.0.0.1:9003/kv/leader-test
 ```
 
 ### 5.3 Dynamic membership (join voters at runtime)
@@ -377,7 +424,7 @@ This section provides a comprehensive reference for all operations you can perfo
 **PUT - Store a value:**
 ```powershell
 curl.exe -X PUT http://127.0.0.1:9001/kv/mykey -d "Hello World" -H "Content-Type: application/octet-stream"
-# Expected: 200 OK (or 307 redirect if not leader)
+# Expected: 204 No Content (or 400 "Not the leader" if this node is a follower)
 ```
 
 **GET - Retrieve a value:**
@@ -389,12 +436,12 @@ curl.exe http://127.0.0.1:9001/kv/mykey
 **DELETE - Remove a key:**
 ```powershell
 curl.exe -X DELETE http://127.0.0.1:9001/kv/mykey
-# Expected: 200 OK
+# Expected: 204 No Content
 curl.exe http://127.0.0.1:9001/kv/mykey
 # Expected: 404 Key not found
 ```
 
-### Leader Detection & Redirects
+### Leader Detection
 
 **Check which node is leader:**
 ```powershell
@@ -404,11 +451,11 @@ curl.exe http://127.0.0.1:9003/raft/status
 # Look for "is_leader": true
 ```
 
-**Test follower redirect (write to non-leader):**
+**Test follower rejection (write to non-leader):**
 ```powershell
 # If node2 is not leader, try writing to it:
 curl.exe -v -X PUT http://127.0.0.1:9002/kv/test -d "value"
-# Expected: 307 Temporary Redirect with Location header pointing to leader
+# Expected: 400 "Not the leader" with an X-Leader header holding the leader's Raft address
 ```
 
 ### Cluster Membership

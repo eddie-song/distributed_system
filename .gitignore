@@ -4,10 +4,9 @@
 *.dll
 *.so
 *.dylib
-node
-node.exe
-cloudctl
-cloudctl.exe
+# Anchored to the root so cmd/node and cmd/cloudctl are still tracked
+/node
+/cloudctl
 bin/
 
 # Test binary, built with `go test -c`
@@ -30,6 +29,12 @@ go.work
 *.swo
 *~
 
+# Claude Code configuration
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -41,3 +46,7 @@ testdata/
 # Markdown files (except README.md)
 *.md
 !README.md
+!docs/architecture.md
+!docs/request-flows.md
+!docs/demo-and-metrics.md
+!docs/API.md
